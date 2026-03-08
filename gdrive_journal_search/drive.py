@@ -66,7 +66,7 @@ def list_google_docs(service, modified_after: datetime | None = None) -> list[di
     """
     query = f"mimeType='{GOOGLE_DOC_MIME}' and trashed=false"
     if modified_after:
-        ts = modified_after.strftime("%Y-%m-%dT%H:%M:%S")
+        ts = modified_after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         query += f" and modifiedTime > '{ts}'"
 
     docs = []
