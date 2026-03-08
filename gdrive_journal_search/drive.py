@@ -125,27 +125,29 @@ def _fetch_one(doc: dict) -> dict | None:
 
 def fetch_docs(
     modified_after: datetime | None = None,
-    on_progress: callable = None,
-) -> tuple[list[dict], int]:
+    skip_ids: set[str] | None = None,
+) -> tuple[Iterator[dict], int]:
     """
-    Fetch all Google Docs in parallel.
+    Fetch Google Docs in parallel, yielding each doc as it completes.
 
-    Returns (list_of_docs, total_count).
-    Calls on_progress(doc_name) as each doc finishes downloading.
+    Returns (iterator_of_docs, total_count).
+    Docs in skip_ids are not downloaded at all.
     """
     service = build_service()
     doc_metas = list_google_docs(service, modified_after=modified_after)
+
+    if skip_ids:
+        doc_metas = [d for d in doc_metas if d["id"] not in skip_ids]
+
     total = len(doc_metas)
 
-    results = []
-    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
-        futures = {executor.submit(_fetch_one, doc): doc for doc in doc_metas}
-        for future in as_completed(futures):
-            doc = future.result()
-            if doc is None:
-                continue  # skipped due to export restriction
-            results.append(doc)
-            if on_progress:
-                on_progress(doc["name"])
+    def _iter():
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+            futures = {executor.submit(_fetch_one, doc): doc for doc in doc_metas}
+            for future in as_completed(futures):
+                doc = future.result()
+                if doc is None:
+                    continue  # skipped due to export restriction
+                yield doc
 
-    return results, total
+    return _iter(), total

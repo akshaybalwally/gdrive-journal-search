@@ -85,6 +85,9 @@ def run_sync(full: bool = False) -> int:
     total_chunks = 0
     doc_count = 0
 
+    if already_indexed:
+        console.print(f"  [dim]skipping {len(already_indexed)} already-indexed docs[/dim]")
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -92,27 +95,17 @@ def run_sync(full: bool = False) -> int:
         MofNCompleteColumn(),
         console=console,
     ) as progress:
-        fetch_task = progress.add_task("Downloading from Drive…", total=None)
+        task = progress.add_task("Downloading + indexing…", total=None)
 
-        def on_fetched(name: str):
-            progress.advance(fetch_task)
-            progress.console.print(f"  [dim]downloaded:[/dim] {name}")
+        docs, total = fetch_docs(modified_after=modified_after, skip_ids=already_indexed)
+        progress.update(task, total=total)
 
-        docs, total = fetch_docs(modified_after=modified_after, on_progress=on_fetched)
-        progress.update(fetch_task, total=total, completed=total, description="Download complete")
-
-        # Filter out docs already indexed in a previous interrupted run
-        docs_to_index = [d for d in docs if d["id"] not in already_indexed]
-        skipped = len(docs) - len(docs_to_index)
-        if skipped:
-            progress.console.print(f"  [dim]skipping {skipped} already-indexed docs[/dim]")
-
-        index_task = progress.add_task("Embedding and indexing…", total=len(docs_to_index))
-        for doc in docs_to_index:
+        for doc in docs:
+            progress.console.print(f"  [dim]indexing:[/dim]   {doc['name']}")
             chunks = upsert_doc(doc)
             total_chunks += chunks
             doc_count += 1
-            progress.advance(index_task)
+            progress.advance(task)
             progress.console.print(f"  [dim]indexed:[/dim]    {doc['name']} [dim]({chunks} chunks)[/dim]")
 
             # Persist progress after each doc so we can resume if interrupted
