@@ -19,7 +19,7 @@ Search your Google Drive journal using natural language. Runs 100% locally — n
 ### 1. Install dependencies
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 ### 2. Install and start Ollama
@@ -39,7 +39,7 @@ ollama pull llama3.2
 ### 4. Run
 
 ```bash
-journal-search
+uv run journal-search
 ```
 
 On first run, a browser window will open to authorize Drive access.
