@@ -60,14 +60,22 @@ def run_sync(full: bool = False) -> int:
         console=console,
         transient=True,
     ) as progress:
-        task = progress.add_task("Indexing docs…", total=None)
+        fetch_task = progress.add_task("Downloading docs from Drive…", total=None)
 
-        for doc in fetch_docs(modified_after=modified_after):
-            progress.update(task, description=f"Indexing: [bold]{doc['name'][:50]}[/bold]")
+        def on_fetched(name: str):
+            progress.advance(fetch_task)
+            progress.update(fetch_task, description=f"Downloaded: [bold]{name[:50]}[/bold]")
+
+        docs, total = fetch_docs(modified_after=modified_after, on_progress=on_fetched)
+        progress.update(fetch_task, total=total, completed=total, description=f"Downloaded {total} docs")
+
+        index_task = progress.add_task("Embedding and indexing…", total=total)
+        for doc in docs:
+            progress.update(index_task, description=f"Indexing: [bold]{doc['name'][:50]}[/bold]")
             chunks = upsert_doc(doc)
             total_chunks += chunks
             doc_count += 1
-            progress.advance(task)
+            progress.advance(index_task)
 
     _save_state({"last_sync": sync_start.isoformat()})
 

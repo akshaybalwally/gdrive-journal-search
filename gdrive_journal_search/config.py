@@ -25,3 +25,6 @@ CHUNK_OVERLAP = 100     # overlap between chunks
 
 # RAG settings
 TOP_K_RESULTS = 8       # number of chunks to retrieve per query
+
+# Sync settings
+FETCH_WORKERS = 10      # parallel threads for Drive doc exports

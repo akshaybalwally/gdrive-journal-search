@@ -1,9 +1,8 @@
 """Google Drive authentication and document fetching."""
 
 import io
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterator
 
 from google.auth.transport.requests import Request
@@ -12,7 +11,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-from .config import CREDENTIALS_FILE, TOKEN_FILE
+from .config import CREDENTIALS_FILE, FETCH_WORKERS, TOKEN_FILE
 
 # Read-only access to Drive files
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -103,22 +102,40 @@ def export_doc_as_text(service, file_id: str) -> str:
     return buf.getvalue().decode("utf-8", errors="replace")
 
 
+def _fetch_one(doc: dict) -> dict:
+    """Fetch text for a single doc (creates its own service for thread safety)."""
+    service = build_service()
+    text = export_doc_as_text(service, doc["id"])
+    return {
+        "id": doc["id"],
+        "name": doc["name"],
+        "created_at": doc.get("createdTime"),
+        "modified_at": doc.get("modifiedTime"),
+        "text": text,
+    }
+
+
 def fetch_docs(
     modified_after: datetime | None = None,
-) -> Iterator[dict]:
+    on_progress: callable = None,
+) -> tuple[list[dict], int]:
     """
-    Yield dicts for each Google Doc with keys:
-        id, name, created_at, modified_at, text
+    Fetch all Google Docs in parallel.
+
+    Returns (list_of_docs, total_count).
+    Calls on_progress(doc_name) as each doc finishes downloading.
     """
     service = build_service()
-    docs = list_google_docs(service, modified_after=modified_after)
+    doc_metas = list_google_docs(service, modified_after=modified_after)
+    total = len(doc_metas)
 
-    for doc in docs:
-        text = export_doc_as_text(service, doc["id"])
-        yield {
-            "id": doc["id"],
-            "name": doc["name"],
-            "created_at": doc.get("createdTime"),
-            "modified_at": doc.get("modifiedTime"),
-            "text": text,
-        }
+    results = []
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+        futures = {executor.submit(_fetch_one, doc): doc for doc in doc_metas}
+        for future in as_completed(futures):
+            doc = future.result()
+            results.append(doc)
+            if on_progress:
+                on_progress(doc["name"])
+
+    return results, total
