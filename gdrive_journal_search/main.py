@@ -1,6 +1,38 @@
 """Entry point for gdrive-journal-search."""
 
 import argparse
+import logging
+import os
+import sys
+import warnings
+
+# Suppress noisy warnings from sentence-transformers / HuggingFace
+# Must be set before any HF libraries are imported
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+warnings.filterwarnings("ignore")
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
+# Suppress any remaining stderr noise during model load
+import contextlib
+
+class _StderrFilter:
+    """Filter out known noisy lines from stderr."""
+    _noise = ("unauthenticated requests", "BertModel LOAD REPORT", "Loading weights",
+              "UNEXPECTED", "embeddings.position_ids")
+    def write(self, msg):
+        if not any(n in msg for n in self._noise):
+            sys.__stderr__.write(msg)
+    def flush(self):
+        sys.__stderr__.flush()
+    def fileno(self):
+        return sys.__stderr__.fileno()
+
+sys.stderr = _StderrFilter()
 
 from rich.console import Console
 
