@@ -102,10 +102,17 @@ def export_doc_as_text(service, file_id: str) -> str:
     return buf.getvalue().decode("utf-8", errors="replace")
 
 
-def _fetch_one(doc: dict) -> dict:
-    """Fetch text for a single doc (creates its own service for thread safety)."""
+def _fetch_one(doc: dict) -> dict | None:
+    """Fetch text for a single doc (creates its own service for thread safety).
+    Returns None if the doc cannot be exported."""
+    from googleapiclient.errors import HttpError
     service = build_service()
-    text = export_doc_as_text(service, doc["id"])
+    try:
+        text = export_doc_as_text(service, doc["id"])
+    except HttpError as e:
+        if e.status_code in (403, 404):
+            return None  # skip files we can't export (shared/restricted)
+        raise
     return {
         "id": doc["id"],
         "name": doc["name"],
@@ -134,6 +141,8 @@ def fetch_docs(
         futures = {executor.submit(_fetch_one, doc): doc for doc in doc_metas}
         for future in as_completed(futures):
             doc = future.result()
+            if doc is None:
+                continue  # skipped due to export restriction
             results.append(doc)
             if on_progress:
                 on_progress(doc["name"])
