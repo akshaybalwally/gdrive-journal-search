@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
 
 from .config import SYNC_STATE_FILE
 from .drive import fetch_docs
@@ -56,26 +56,25 @@ def run_sync(full: bool = False) -> int:
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TaskProgressColumn(),
+        MofNCompleteColumn(),
         console=console,
-        transient=True,
     ) as progress:
-        fetch_task = progress.add_task("Downloading docs from Drive…", total=None)
+        fetch_task = progress.add_task("Downloading from Drive…", total=None)
 
         def on_fetched(name: str):
             progress.advance(fetch_task)
-            progress.update(fetch_task, description=f"Downloaded: [bold]{name[:50]}[/bold]")
+            progress.console.print(f"  [dim]downloaded:[/dim] {name}")
 
         docs, total = fetch_docs(modified_after=modified_after, on_progress=on_fetched)
-        progress.update(fetch_task, total=total, completed=total, description=f"Downloaded {total} docs")
+        progress.update(fetch_task, total=total, completed=total, description="Download complete")
 
         index_task = progress.add_task("Embedding and indexing…", total=total)
         for doc in docs:
-            progress.update(index_task, description=f"Indexing: [bold]{doc['name'][:50]}[/bold]")
             chunks = upsert_doc(doc)
             total_chunks += chunks
             doc_count += 1
             progress.advance(index_task)
+            progress.console.print(f"  [dim]indexed:[/dim]    {doc['name']} [dim]({chunks} chunks)[/dim]")
 
     _save_state({"last_sync": sync_start.isoformat()})
 
