@@ -9,19 +9,17 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 from .config import CREDENTIALS_FILE, FETCH_WORKERS, TOKEN_FILE
 
-# Read-only access to Drive files
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
-EXPORT_MIME = "text/plain"
 
 
-def get_credentials() -> Credentials:
-    """Obtain (and refresh/create) OAuth2 credentials."""
+def _get_credentials() -> Credentials:
+    """Load cached credentials, refreshing or re-authenticating as needed."""
     creds = None
 
     if TOKEN_FILE.exists():
@@ -45,44 +43,27 @@ def get_credentials() -> Credentials:
     return creds
 
 
-def build_service():
-    """Build and return an authenticated Drive API service."""
-    creds = get_credentials()
-    return build("drive", "v3", credentials=creds)
+def _build_service():
+    """Create an authenticated Drive API v3 service."""
+    return build("drive", "v3", credentials=_get_credentials())
 
 
-def _parse_rfc3339(dt_str: str | None) -> datetime | None:
-    if not dt_str:
-        return None
-    return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-
-
-def list_google_docs(service, modified_after: datetime | None = None) -> list[dict]:
-    """
-    Return metadata for all Google Docs in Drive.
-
-    If modified_after is given, only return docs modified after that time.
-    Each dict has: id, name, createdTime, modifiedTime.
-    """
+def _list_google_docs(service, modified_after: datetime | None = None) -> list[dict]:
+    """Paginate through all Google Docs, optionally filtered by modification time."""
     query = f"mimeType='{GOOGLE_DOC_MIME}' and trashed=false"
     if modified_after:
         ts = modified_after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         query += f" and modifiedTime > '{ts}'"
 
-    docs = []
+    docs: list[dict] = []
     page_token = None
-
     while True:
-        resp = (
-            service.files()
-            .list(
-                q=query,
-                fields="nextPageToken, files(id, name, createdTime, modifiedTime)",
-                pageSize=1000,
-                pageToken=page_token,
-            )
-            .execute()
-        )
+        resp = service.files().list(
+            q=query,
+            fields="nextPageToken, files(id, name, createdTime, modifiedTime)",
+            pageSize=1000,
+            pageToken=page_token,
+        ).execute()
         docs.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
         if not page_token:
@@ -91,9 +72,9 @@ def list_google_docs(service, modified_after: datetime | None = None) -> list[di
     return docs
 
 
-def export_doc_as_text(service, file_id: str) -> str:
-    """Export a Google Doc as plain text and return the content."""
-    request = service.files().export_media(fileId=file_id, mimeType=EXPORT_MIME)
+def _export_doc_text(service, file_id: str) -> str:
+    """Export a single Google Doc as plain text."""
+    request = service.files().export_media(fileId=file_id, mimeType="text/plain")
     buf = io.BytesIO()
     downloader = MediaIoBaseDownload(buf, request)
     done = False
@@ -102,23 +83,24 @@ def export_doc_as_text(service, file_id: str) -> str:
     return buf.getvalue().decode("utf-8", errors="replace")
 
 
-def _fetch_one(doc: dict) -> dict | None:
-    """Fetch text for a single doc (creates its own service for thread safety).
-    Returns None if the doc cannot be exported."""
-    from googleapiclient.errors import HttpError
-    service = build_service()
+def _fetch_one(meta: dict) -> dict | None:
+    """Download one doc's text. Returns None if the doc can't be exported.
+
+    Each call builds its own service instance for thread safety.
+    """
+    service = _build_service()
     try:
-        text = export_doc_as_text(service, doc["id"])
+        text = _export_doc_text(service, meta["id"])
     except HttpError as e:
         if e.status_code in (403, 404):
-            print(f"Skipping '{doc['name']}' (permissions error)", flush=True)
+            print(f"Skipping '{meta['name']}' (permissions error)", flush=True)
             return None
         raise
     return {
-        "id": doc["id"],
-        "name": doc["name"],
-        "created_at": doc.get("createdTime"),
-        "modified_at": doc.get("modifiedTime"),
+        "id": meta["id"],
+        "name": meta["name"],
+        "created_at": meta.get("createdTime"),
+        "modified_at": meta.get("modifiedTime"),
         "text": text,
     }
 
@@ -127,27 +109,25 @@ def fetch_docs(
     modified_after: datetime | None = None,
     skip_ids: set[str] | None = None,
 ) -> tuple[Iterator[dict], int]:
-    """
-    Fetch Google Docs in parallel, yielding each doc as it completes.
+    """Fetch Google Docs in parallel, yielding each as it finishes downloading.
 
-    Returns (iterator_of_docs, total_count).
-    Docs in skip_ids are not downloaded at all.
+    Returns (doc_iterator, total_count). Docs whose IDs are in *skip_ids*
+    are excluded entirely (not downloaded).
     """
-    service = build_service()
-    doc_metas = list_google_docs(service, modified_after=modified_after)
+    service = _build_service()
+    metas = _list_google_docs(service, modified_after=modified_after)
 
     if skip_ids:
-        doc_metas = [d for d in doc_metas if d["id"] not in skip_ids]
+        metas = [m for m in metas if m["id"] not in skip_ids]
 
-    total = len(doc_metas)
+    total = len(metas)
 
-    def _iter():
-        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
-            futures = {executor.submit(_fetch_one, doc): doc for doc in doc_metas}
+    def _iter() -> Iterator[dict]:
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            futures = {pool.submit(_fetch_one, m): m for m in metas}
             for future in as_completed(futures):
                 doc = future.result()
-                if doc is None:
-                    continue  # skipped due to export restriction
-                yield doc
+                if doc is not None:
+                    yield doc
 
     return _iter(), total

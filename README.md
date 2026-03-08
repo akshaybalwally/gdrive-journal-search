@@ -1,5 +1,7 @@
 # gdrive-journal-search
 
+> **Disclaimer** — this app is pretty functional, but is entirely vibecoded. Your mileage may vary.
+
 Search your Google Drive journal using natural language. Runs 100% locally — no API costs.
 
 ## How it works

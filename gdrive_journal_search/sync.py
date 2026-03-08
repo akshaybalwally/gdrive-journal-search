@@ -1,17 +1,19 @@
-"""Sync state management and the main indexing pipeline."""
+"""Sync state management and the Drive → ChromaDB indexing pipeline."""
 
 import json
 from datetime import datetime, timezone
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 
 from .config import SYNC_STATE_FILE
 from .drive import fetch_docs
-from .embeddings import upsert_doc, collection_count
+from .embeddings import collection_count, upsert_doc
 
 console = Console()
 
+
+# -- State persistence --------------------------------------------------------
 
 def _load_state() -> dict:
     if SYNC_STATE_FILE.exists():
@@ -20,40 +22,33 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    # Write atomically via a temp file to avoid corruption on interrupt
+    """Write state atomically (via temp file) to survive interrupts."""
     tmp = SYNC_STATE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2))
     tmp.replace(SYNC_STATE_FILE)
 
 
-def get_last_sync() -> datetime | None:
-    state = _load_state()
+def _last_sync_time(state: dict) -> datetime | None:
     ts = state.get("last_sync")
-    if ts:
-        return datetime.fromisoformat(ts)
-    return None
+    return datetime.fromisoformat(ts) if ts else None
 
 
-def _get_in_progress(state: dict) -> dict | None:
-    """Return the in-progress sync record if one exists, else None."""
-    return state.get("in_progress")
-
+# -- Sync pipeline ------------------------------------------------------------
 
 def run_sync(full: bool = False) -> int:
-    """
-    Download Google Docs and index them into ChromaDB.
+    """Download Google Docs and index them into ChromaDB.
 
-    Tracks per-doc progress so interrupted syncs can resume without
-    re-indexing already-completed docs.
+    Tracks per-doc progress in *sync_state.json* so interrupted syncs
+    can be resumed without re-indexing completed docs.
 
     Returns the number of chunks indexed in this run.
     """
     state = _load_state()
-    in_progress = _get_in_progress(state)
+    in_progress = state.get("in_progress")
 
-    # Determine if we're resuming an interrupted sync
+    # Resume logic: reuse prior progress if the sync type matches
     resuming = in_progress is not None and in_progress.get("full") == full
-    already_indexed: set[str] = set(in_progress.get("indexed_ids", [])) if resuming else set()
+    already_indexed = set(in_progress["indexed_ids"]) if resuming else set()
 
     if resuming and already_indexed:
         console.print(
@@ -61,20 +56,19 @@ def run_sync(full: bool = False) -> int:
             f"{len(already_indexed)} docs already indexed, skipping them.[/yellow]"
         )
 
-    # For a fresh run, record start time; for a resume, keep original start time
-    if resuming:
-        sync_start = datetime.fromisoformat(in_progress["started_at"])
-    else:
-        sync_start = datetime.now(timezone.utc)
-
-    modified_after = None if full else get_last_sync()
+    sync_start = (
+        datetime.fromisoformat(in_progress["started_at"])
+        if resuming
+        else datetime.now(timezone.utc)
+    )
+    modified_after = None if full else _last_sync_time(state)
 
     if modified_after:
-        console.print(f"[cyan]Fetching docs modified after {modified_after.strftime('%Y-%m-%d %H:%M UTC')}…[/cyan]")
+        console.print(f"[cyan]Fetching docs modified after {modified_after:%Y-%m-%d %H:%M UTC}…[/cyan]")
     else:
         console.print("[cyan]Fetching all Google Docs from Drive…[/cyan]")
 
-    # Persist that a sync is in progress before we start
+    # Mark sync as in-progress before doing any work
     state["in_progress"] = {
         "full": full,
         "started_at": sync_start.isoformat(),
@@ -82,21 +76,19 @@ def run_sync(full: bool = False) -> int:
     }
     _save_state(state)
 
-    total_chunks = 0
-    doc_count = 0
-
     if already_indexed:
         console.print(f"  [dim]skipping {len(already_indexed)} already-indexed docs[/dim]")
 
+    # Fetch and index, checkpointing after every doc
+    total_chunks = 0
+    doc_count = 0
+
     with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+        BarColumn(), MofNCompleteColumn(),
         console=console,
     ) as progress:
         task = progress.add_task("Downloading + indexing…", total=None)
-
         docs, total = fetch_docs(modified_after=modified_after, skip_ids=already_indexed)
         progress.update(task, total=total)
 
@@ -108,11 +100,10 @@ def run_sync(full: bool = False) -> int:
             progress.advance(task)
             progress.console.print(f"  [dim]indexed:[/dim]    {doc['name']} [dim]({chunks} chunks)[/dim]")
 
-            # Persist progress after each doc so we can resume if interrupted
             state["in_progress"]["indexed_ids"].append(doc["id"])
             _save_state(state)
 
-    # Sync complete — update last_sync and clear in-progress record
+    # Finalize: record completion time and clear in-progress marker
     state["last_sync"] = sync_start.isoformat()
     del state["in_progress"]
     _save_state(state)
@@ -125,16 +116,14 @@ def run_sync(full: bool = False) -> int:
     return total_chunks
 
 
-def prompt_sync() -> None:
-    """
-    On startup: check sync state and prompt the user.
-    Auto-resumes any interrupted sync without asking.
-    """
-    state = _load_state()
-    in_progress = _get_in_progress(state)
-    has_data = collection_count() > 0
+# -- Startup prompt -----------------------------------------------------------
 
-    # Auto-resume an interrupted sync
+def prompt_sync() -> None:
+    """On startup: detect interrupted syncs, check for updates, or skip."""
+    state = _load_state()
+    in_progress = state.get("in_progress")
+
+    # Offer to resume an interrupted sync
     if in_progress:
         n = len(in_progress.get("indexed_ids", []))
         kind = "full" if in_progress.get("full") else "incremental"
@@ -142,23 +131,24 @@ def prompt_sync() -> None:
             f"\n[yellow]Previous {kind} sync was interrupted "
             f"({n} docs already indexed).[/yellow]"
         )
-        answer = console.input("Resume it? ([green]y[/green]=resume, [red]n[/red]=start fresh) [y/n]: ").strip().lower()
+        answer = console.input(
+            "Resume it? ([green]y[/green]=resume, [red]n[/red]=start fresh) [y/n]: "
+        ).strip().lower()
         if answer == "n":
-            # Discard in-progress state and start a new full sync
             del state["in_progress"]
             _save_state(state)
-            run_sync(full=in_progress.get("full", True))
-        else:
-            run_sync(full=in_progress.get("full", True))
+        run_sync(full=in_progress.get("full", True))
         return
 
-    if not has_data:
+    # No data at all — must do a full sync
+    if collection_count() == 0:
         console.print("[yellow]No local index found. Running full sync from Google Drive…[/yellow]")
         run_sync(full=True)
         return
 
-    last = state.get("last_sync")
-    last_str = datetime.fromisoformat(last).strftime("%Y-%m-%d %H:%M UTC") if last else "unknown"
+    # Normal startup: show status and offer choices
+    last = _last_sync_time(state)
+    last_str = f"{last:%Y-%m-%d %H:%M UTC}" if last else "unknown"
     console.print(f"\nLocal index last synced: [bold]{last_str}[/bold]")
     console.print(f"Chunks in DB: [bold]{collection_count()}[/bold]\n")
 
