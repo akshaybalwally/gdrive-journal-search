@@ -1,0 +1,21 @@
+[project]
+name = "gdrive-journal-search"
+version = "0.1.0"
+description = "Search your Google Drive journal using natural language (local LLM + embeddings)"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.0",
+    "google-auth-httplib2>=0.2",
+    "google-auth-oauthlib>=1.2",
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
+    "ollama>=0.3",
+    "rich>=13.0",
+]
+
+[project.scripts]
+journal-search = "gdrive_journal_search.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

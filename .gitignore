@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.env
+.env
+credentials.json
+token.json
+chroma_db/
+sync_state.json
+*.egg-info/
+dist/
+.DS_Store
