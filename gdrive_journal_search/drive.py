@@ -111,7 +111,8 @@ def _fetch_one(doc: dict) -> dict | None:
         text = export_doc_as_text(service, doc["id"])
     except HttpError as e:
         if e.status_code in (403, 404):
-            return None  # skip files we can't export (shared/restricted)
+            print(f"Skipping '{doc['name']}' (permissions error)", flush=True)
+            return None
         raise
     return {
         "id": doc["id"],
