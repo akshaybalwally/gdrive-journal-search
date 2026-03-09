@@ -3,10 +3,11 @@
 import ollama
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.rule import Rule
 
-from .config import OLLAMA_HOST, OLLAMA_MODEL, TOP_K_RESULTS
-from .embeddings import query as vector_query
+from .config import OLLAMA_HOST, OLLAMA_MODEL
+from .retrieval import BM25Index, query as hybrid_query
 
 console = Console()
 
@@ -37,6 +38,24 @@ def _format_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _print_debug_chunks(chunks: list[dict]) -> None:
+    """Print retrieved chunks in a debug-friendly format."""
+    console.print()
+    console.print(Rule("[bold yellow]DEBUG: Retrieved Chunks[/bold yellow]"))
+    for i, chunk in enumerate(chunks, 1):
+        date = chunk["created_at"][:10] if chunk["created_at"] else "?"
+        score = chunk.get("rerank_score", "n/a")
+        header = f"[{i}] {chunk['doc_name']} ({date})  rerank={score}"
+        console.print(Panel(
+            f"[dim cyan]{chunk['text'][:500]}{'…' if len(chunk['text']) > 500 else ''}[/dim cyan]",
+            title=f"[yellow]{header}[/yellow]",
+            border_style="yellow",
+            expand=False,
+        ))
+    console.print(Rule("[bold yellow]END DEBUG[/bold yellow]"))
+    console.print()
+
+
 def _ollama_available() -> bool:
     """Return True if Ollama is reachable and the configured model exists."""
     try:
@@ -47,7 +66,7 @@ def _ollama_available() -> bool:
         return False
 
 
-def chat_loop() -> None:
+def chat_loop(debug: bool = False) -> None:
     """Run the interactive chat REPL."""
     console.print(Rule("[bold blue]Journal Search[/bold blue]"))
 
@@ -59,6 +78,14 @@ def chat_loop() -> None:
             f"  2. Pull model:    [cyan]ollama pull {OLLAMA_MODEL}[/cyan]"
         )
         return
+
+    if debug:
+        console.print("[yellow]Debug mode ON — retrieved chunks will be shown.[/yellow]")
+
+    # Build the BM25 index from all stored chunks
+    console.print("[dim]Building BM25 index…[/dim]", end=" ")
+    bm25 = BM25Index()
+    console.print("[dim]done.[/dim]")
 
     console.print(
         f"Using model [bold]{OLLAMA_MODEL}[/bold] · "
@@ -84,8 +111,12 @@ def chat_loop() -> None:
             console.print(Markdown(HELP_TEXT))
             continue
 
-        # Retrieve relevant chunks and build the prompt
-        chunks = vector_query(user_input, n_results=TOP_K_RESULTS)
+        # Retrieve relevant chunks via hybrid pipeline
+        chunks = hybrid_query(user_input, bm25_index=bm25)
+
+        if debug:
+            _print_debug_chunks(chunks)
+
         context = _format_context(chunks) if chunks else "No relevant documents found."
 
         messages = [

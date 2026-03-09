@@ -24,6 +24,8 @@ _NOISE_FRAGMENTS = (
     "Loading weights",
     "UNEXPECTED",
     "embeddings.position_ids",
+    "CrossEncoder",
+    "No sentence-transformers model found",
 )
 _real_stderr = sys.__stderr__
 
@@ -64,6 +66,10 @@ def main() -> None:
         "--sync-only", action="store_true",
         help="Sync Drive docs and exit without starting the chat.",
     )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Show retrieved chunks before each answer.",
+    )
     args = parser.parse_args()
 
     console.print("\n[bold]gdrive-journal-search[/bold]\n")
@@ -75,7 +81,7 @@ def main() -> None:
         prompt_sync()
 
     if not args.sync_only:
-        chat_loop()
+        chat_loop(debug=args.debug)
 
 
 if __name__ == "__main__":

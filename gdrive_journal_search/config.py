@@ -12,6 +12,9 @@ TOKEN_FILE = BASE_DIR / "token.json"
 # Embedding model (runs locally via sentence-transformers)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
+# Reranking model (cross-encoder, runs locally)
+RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
 # Ollama LLM settings
 OLLAMA_MODEL = "llama3.2"
 OLLAMA_HOST = "http://localhost:11434"
@@ -23,8 +26,9 @@ CHROMA_COLLECTION = "journal"
 CHUNK_SIZE = 800        # characters per chunk
 CHUNK_OVERLAP = 100     # overlap between chunks
 
-# RAG settings
-TOP_K_RESULTS = 8       # number of chunks to retrieve per query
+# Retrieval settings
+TOP_K_RETRIEVE = 20     # candidates from each retrieval method (vector + BM25)
+TOP_K_FINAL = 10        # chunks kept after reranking and sent to LLM
 
 # Sync settings
 FETCH_WORKERS = 10      # parallel threads for Drive doc exports
