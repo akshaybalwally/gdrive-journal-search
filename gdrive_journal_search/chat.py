@@ -41,14 +41,48 @@ def _format_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _print_debug_chunks(chunks: list[dict]) -> None:
-    """Print retrieved chunks in a debug-friendly format."""
+def _print_debug_info(
+    system_prompt: str,
+    augmented_query: str,
+    history: list[dict],
+    chunks: list[dict],
+) -> None:
+    """Print everything the model receives as input."""
     console.print()
-    console.print(Rule("[bold yellow]DEBUG: Retrieved Chunks[/bold yellow]"))
+
+    # System prompt
+    console.print(Panel(
+        f"[dim cyan]{system_prompt}[/dim cyan]",
+        title="[yellow]System Prompt[/yellow]",
+        border_style="yellow",
+    ))
+
+    # Retrieval query (augmented with date)
+    console.print(Panel(
+        f"[dim cyan]{augmented_query}[/dim cyan]",
+        title="[yellow]Retrieval Query[/yellow]",
+        border_style="yellow",
+    ))
+
+    # Conversation history (if any)
+    recent = history[-6:]
+    if recent:
+        history_text = ""
+        for turn in recent:
+            role = turn["role"].upper()
+            history_text += f"[bold]{role}:[/bold] {turn['content'][:200]}\n"
+        console.print(Panel(
+            f"[dim cyan]{history_text.strip()}[/dim cyan]",
+            title=f"[yellow]Conversation History ({len(recent)} turns)[/yellow]",
+            border_style="yellow",
+        ))
+
+    # Retrieved chunks
+    console.print(Rule("[bold yellow]Retrieved Chunks ({count})[/bold yellow]".format(count=len(chunks))))
     for i, chunk in enumerate(chunks, 1):
-        date = chunk["created_at"][:10] if chunk["created_at"] else "?"
+        d = chunk["created_at"][:10] if chunk["created_at"] else "?"
         score = chunk.get("rerank_score", "n/a")
-        header = f"[{i}] {chunk['doc_name']} ({date})  rerank={score}"
+        header = f"[{i}] {chunk['doc_name']} ({d})  rerank={score}"
         console.print(Panel(
             f"[dim cyan]{chunk['text'][:500]}{'…' if len(chunk['text']) > 500 else ''}[/dim cyan]",
             title=f"[yellow]{header}[/yellow]",
@@ -122,13 +156,14 @@ def chat_loop(debug: bool = False) -> None:
         # Retrieve relevant chunks via hybrid pipeline
         chunks = hybrid_query(augmented_query, bm25_index=bm25)
 
-        if debug:
-            _print_debug_chunks(chunks)
-
         context = _format_context(chunks) if chunks else "No relevant documents found."
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat())
+
+        if debug:
+            _print_debug_info(system_prompt, augmented_query, history, chunks)
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat())},
+            {"role": "system", "content": system_prompt},
             *history[-6:],
             {
                 "role": "user",
