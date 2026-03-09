@@ -27,8 +27,8 @@ CHUNK_SIZE = 800        # characters per chunk
 CHUNK_OVERLAP = 100     # overlap between chunks
 
 # Retrieval settings
-TOP_K_RETRIEVE = 20     # candidates from each retrieval method (vector + BM25)
-TOP_K_FINAL = 10        # chunks kept after reranking and sent to LLM
+TOP_K_RETRIEVE = 75     # candidates from each method (vector + BM25 → ~150 merged)
+TOP_K_FINAL = 20        # chunks kept after reranking and sent to LLM
 
 # Sync settings
 FETCH_WORKERS = 10      # parallel threads for Drive doc exports
