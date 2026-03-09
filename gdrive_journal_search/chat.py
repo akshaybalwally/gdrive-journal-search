@@ -1,5 +1,7 @@
 """CLI chat interface: retrieves relevant journal chunks and queries Ollama."""
 
+from datetime import date
+
 import ollama
 from rich.console import Console
 from rich.markdown import Markdown
@@ -11,15 +13,16 @@ from .retrieval import BM25Index, query as hybrid_query
 
 console = Console()
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 You are a helpful assistant with access to the user's personal journal and \
-documents from Google Drive.
+documents from Google Drive. Today's date is {today}.
 
 Base your responses primarily on the provided document excerpts. If the \
 excerpts don't contain enough information, say so honestly. Pay attention \
 to document titles and dates — many journal entries have dates as titles. \
-Be thoughtful and personal, as you are helping the user reflect on their \
-own writing."""
+When the user says "recently", "lately", or "last few weeks", interpret \
+that relative to today's date. Be thoughtful and personal, as you are \
+helping the user reflect on their own writing."""
 
 HELP_TEXT = """\
 **Tips:**
@@ -111,8 +114,13 @@ def chat_loop(debug: bool = False) -> None:
             console.print(Markdown(HELP_TEXT))
             continue
 
+        # Add date context to the query so "lately"/"recently" resolve
+        # to actual dates in the retrieval step
+        today = date.today()
+        augmented_query = f"(as of {today.isoformat()}) {user_input}"
+
         # Retrieve relevant chunks via hybrid pipeline
-        chunks = hybrid_query(user_input, bm25_index=bm25)
+        chunks = hybrid_query(augmented_query, bm25_index=bm25)
 
         if debug:
             _print_debug_chunks(chunks)
@@ -120,7 +128,7 @@ def chat_loop(debug: bool = False) -> None:
         context = _format_context(chunks) if chunks else "No relevant documents found."
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat())},
             *history[-6:],
             {
                 "role": "user",
