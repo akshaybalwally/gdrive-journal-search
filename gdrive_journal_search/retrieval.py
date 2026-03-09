@@ -48,8 +48,6 @@ class BM25Index:
 
         results = []
         for i in top_indices:
-            if scores[i] <= 0:
-                break
             meta = self._metas[i]
             results.append({
                 "id": self._ids[i],
